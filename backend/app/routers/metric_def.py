@@ -10,10 +10,11 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.schemas import ActionPayload, ActionResult, EntryPayload
-from app.services.metric_def import MetricDefService
+from app.services.metric_def import MetricCaliberService, MetricDefService
 
 router = APIRouter(prefix="/api/metric_def", tags=["指标定义"])
 service = MetricDefService()
+caliber = MetricCaliberService()
 LIST_FIELDS = ["指标编号", "指标名称", "计算公式", "统计粒度", "时间窗口", "筛选条件", "精度位数", "口径版本"]
 STATUSES = ["草稿", "已定义", "已发布", "已废弃"]
 
@@ -34,9 +35,75 @@ def get_summary() -> dict[str, Any]:
     ]}
 
 
+@router.get("/caliber/status-records")
+def list_status_records() -> dict[str, Any]:
+    """指标状态记录：当前状态、已处理状态与状态水位，用来识别状态流转边界。"""
+    items = caliber.status_records()
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/caliber/refresh-list")
+def list_refresh_list(
+    task_no: str | None = Query(default=None, description="按口径切换任务编号过滤"),
+    valid_only: bool = Query(default=False, description="只看当前有效版本"),
+) -> dict[str, Any]:
+    """指标刷新清单：保留历史版本，可按任务与有效性回查。"""
+    items = caliber.refresh_list(task_no, valid_only=valid_only)
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/caliber/results")
+def list_caliber_results() -> dict[str, Any]:
+    """口径切换后的指标结果：同一指标状态只输出一条。"""
+    items = caliber.results()
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/caliber/tasks")
+def list_switch_tasks() -> dict[str, Any]:
+    items = caliber.tasks()
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/caliber/tasks/{task_id}")
+def get_switch_task(task_id: int) -> dict:
+    detail = caliber.task_detail(task_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"口径切换任务 {task_id} 不存在")
+    return detail
+
+
+@router.post("/caliber/switch")
+def switch_caliber(payload: EntryPayload) -> dict[str, Any]:
+    """发起口径切换：按状态流转边界重算已确认指标，复用已确认版本。"""
+    result, error = caliber.switch(payload.values)
+    if result is None:
+        return {"ok": False, "message": error}
+    return result
+
+
+@router.post("/caliber/diff")
+def write_caliber_diff(payload: EntryPayload) -> dict[str, Any]:
+    """指标差异接口：把核对结果写入指标刷新清单并保留对应版本。"""
+    result, error = caliber.apply_diff(payload.values)
+    if result is None:
+        return {"ok": False, "message": error}
+    return result
+
+
+@router.post("/{entry_id}/actions")
+def run_action(entry_id: int, payload: ActionPayload) -> ActionResult:
+    """推进指标发布状态；状态变化会在下次口径切换时形成新的流转边界。"""
+    entry, message = service.run_action(entry_id, payload.action.strip())
+    if entry is None:
+        return ActionResult(ok=False, message=message)
+    return ActionResult(ok=True, message=message, entry=entry)
+
+
 @router.get("")
 def list_results() -> dict[str, Any]:
     return {"items": service.list_results()}
+
 
 
 @router.post("/run")

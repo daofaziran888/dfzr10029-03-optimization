@@ -6,17 +6,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.seed import SEED_ROWS
+from app.seed import SEED_AUX_ROWS, SEED_ROWS
 
 
 class Store:
     def __init__(self) -> None:
         self._tables: dict[str, list[dict[str, Any]]] = {
-            name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
+            name: [dict(row) for row in rows]
+            for name, rows in {**SEED_ROWS, **SEED_AUX_ROWS}.items()
         }
+        # 辅助表（指标刷新清单、口径切换任务）只服务于指标分析链路，
+        # 不参与运营概览的模块统计，避免把内部流水当成业务模块暴露。
+        self._public_modules = set(SEED_ROWS)
 
     def module_names(self) -> list[str]:
-        return sorted(self._tables)
+        return sorted(self._public_modules)
 
     def rows(self, module: str) -> list[dict[str, Any]]:
         return self._tables.setdefault(module, [])
